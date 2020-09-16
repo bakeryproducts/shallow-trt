@@ -83,7 +83,7 @@ class HostDeviceMem:
     def dtoh(self, stream): cuda.memcpy_dtoh_async(self.h, self.d, stream)
 
 
-def allocate_buffers(engine, dtypes=None, stream=None):
+def allocate_buffers(engine, dtypes=None):
     """
     Args:
         engine (trt.ICudaEngine): TensorRT engine
@@ -91,12 +91,10 @@ def allocate_buffers(engine, dtypes=None, stream=None):
         inputs [HostDeviceMem]: engine input memory
         outputs [HostDeviceMem]: engine output memory
         bindings [int]: buffer to device bindings
-        stream (cuda.Stream): cuda stream for engine inference synchronization
     """
     inputs = []
     outputs = []
     bindings = []
-    if stream is None: stream = cuda.Stream()
     for i, binding in enumerate(engine):
         bind_name = engine.get_binding_name(i)
         size = trt.volume(engine.get_binding_shape(binding)) * engine.max_batch_size
@@ -113,7 +111,7 @@ def allocate_buffers(engine, dtypes=None, stream=None):
         if engine.binding_is_input(binding): inputs.append(mem)
         else: outputs.append(mem)
 
-    return inputs, outputs, bindings, stream
+    return inputs, outputs, bindings
 
 #export
 class BaseEngine:
@@ -135,7 +133,8 @@ class BaseEngine:
         self.engine = load_engine(self.runtime, self.config['engine'])
         self.context = self.engine.create_execution_context()
         dtypes = self.config.get('dtypes', None)
-        self.inputs, self.outputs, self.bindings, self.stream = allocate_buffers(self.engine, dtypes=dtypes)
+        self.stream = cuda.Stream()
+        self.inputs, self.outputs, self.bindings = allocate_buffers(self.engine, dtypes=dtypes)
         self.output_shapes = [self.engine.get_binding_shape(i) for i in range(self.engine.num_bindings) if not self.engine.binding_is_input(i)]
 
     def sync(self): self.stream.synchronize()
