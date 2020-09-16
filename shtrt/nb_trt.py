@@ -79,16 +79,11 @@ class HostDeviceMem:
 
     def __str__(self):   return "Host:\n" + str(self.h) + "\nDevice:\n" + str(self.d)
     def __repr__(self):  return self.__str__()
+    def htod(self, stream): cuda.memcpy_htod_async(self.d, self.h, stream)
+    def dtoh(self, stream): cuda.memcpy_dtoh_async(self.h, self.d, stream)
 
-    def htod(self, stream):
-        cuda.memcpy_htod_async(self.d, self.h, stream)
-        #stream.synchronize()
 
-    def dtoh(self, stream):
-        cuda.memcpy_dtoh_async(self.h, self.d, stream)
-        #stream.synchronize()
-
-def allocate_buffers(engine, dtypes=None):
+def allocate_buffers(engine, dtypes=None, stream=None):
     """
     Args:
         engine (trt.ICudaEngine): TensorRT engine
@@ -101,14 +96,12 @@ def allocate_buffers(engine, dtypes=None):
     inputs = []
     outputs = []
     bindings = []
-    stream = cuda.Stream()
+    if stream is None: stream = cuda.Stream()
     for i, binding in enumerate(engine):
         bind_name = engine.get_binding_name(i)
         size = trt.volume(engine.get_binding_shape(binding)) * engine.max_batch_size
-        if dtypes is not None:
-            dtype = dtypes[i]
-        else:
-            dtype = trt.nptype(engine.get_binding_dtype(binding))
+        if dtypes is not None: dtype = dtypes[i]
+        else: dtype = trt.nptype(engine.get_binding_dtype(binding))
 
         host_mem = cuda.pagelocked_empty(size, dtype)
         device_mem = cuda.mem_alloc(host_mem.nbytes)
