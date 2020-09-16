@@ -1,8 +1,0 @@
-README.md
-setup.py
-shallow-trt/__init__.py
-shallow-trt/nb_trt.py
-shallow_trt.egg-info/PKG-INFO
-shallow_trt.egg-info/SOURCES.txt
-shallow_trt.egg-info/dependency_links.txt
-shallow_trt.egg-info/top_level.txt

@@ -67,8 +67,8 @@ def notebook2scriptSingle(fname):
     for cell in code_cells: module += ''.join(cell['source'][1:]) + '\n\n'
     # remove trailing spaces
     module = re.sub(r' +$', '', module, flags=re.MULTILINE)
-    if not (fname.parent/'shallow-trt').exists(): (fname.parent/'shallow-trt').mkdir()
-    output_path = fname.parent/'shallow-trt'/fname_out
+    if not (fname.parent/'shtrt').exists(): (fname.parent/'shtrt').mkdir()
+    output_path = fname.parent/'shtrt'/fname_out
     with io.open(output_path, "w", encoding="utf-8") as f:
         f.write(module[:-2])
     timestamp = '{:%Y_%b_%d_%H_%M_%S}'.format(datetime.datetime.now())

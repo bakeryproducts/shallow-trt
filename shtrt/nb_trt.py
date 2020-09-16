@@ -6,8 +6,6 @@
 
 import sys
 import os
-import logging
-from itertools import chain
 
 import pycuda.driver as cuda
 import pycuda.autoinit
@@ -16,62 +14,6 @@ import tensorrt as trt
 
 EXPLICIT_BATCH = 1 << (int)(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
 def GiB(val): return val * 1 << 30
-
-class HostDeviceMem:
-    def __init__(self, host_mem, device_mem):
-        self.h = host_mem
-        self.d = device_mem
-
-    def __str__(self):   return "Host:\n" + str(self.h) + "\nDevice:\n" + str(self.d)
-    def __repr__(self):  return self.__str__()
-
-    def htod(self, stream):
-        cuda.memcpy_htod_async(self.d, self.h, stream)
-        #stream.synchronize()
-
-    def dtoh(self, stream):
-        cuda.memcpy_dtoh_async(self.h, self.d, stream)
-        #stream.synchronize()
-
-def allocate_buffers(engine, dtypes=None):
-    """
-    Args:
-        engine (trt.ICudaEngine): TensorRT engine
-    Returns:
-        inputs [HostDeviceMem]: engine input memory
-        outputs [HostDeviceMem]: engine output memory
-        bindings [int]: buffer to device bindings
-        stream (cuda.Stream): cuda stream for engine inference synchronization
-    """
-    inputs = []
-    outputs = []
-    bindings = []
-    stream = cuda.Stream()
-    for i, binding in enumerate(engine):
-        size = trt.volume(engine.get_binding_shape(binding)) * engine.max_batch_size
-        if dtypes is not None:
-            dtype = dtypes[i]
-        else:
-            dtype = trt.nptype(engine.get_binding_dtype(binding))
-
-        host_mem = cuda.pagelocked_empty(size, dtype)
-        device_mem = cuda.mem_alloc(host_mem.nbytes)
-        bindings.append(int(device_mem))
-
-        if engine.binding_is_input(binding):
-            inputs.append(HostDeviceMem(host_mem, device_mem))
-        else:
-            outputs.append(HostDeviceMem(host_mem, device_mem))
-    return inputs, outputs, bindings, stream
-
-
-def do_inference(context, bindings, inputs, outputs, stream, batch_size=1, explicit_batch=False):
-    [inp.htod(stream) for inp in inputs]
-    context_exec = context.execute_async_v2 if explicit_batch else context.execute_async
-    context_exec(batch_size=batch_size, bindings=bindings, stream_handle=stream.handle)
-    [out.dtoh(stream) for out in outputs]
-    stream.synchronize()
-    return [out.h for out in outputs]
 
 def parse_onnx(onnx_file_path, explicit_batch=None, max_batch_size=1):
     TRT_LOGGER = trt.Logger(trt.Logger.VERBOSE)
@@ -121,6 +63,66 @@ def init_trt():
     runtime = trt.Runtime(trt_logger)
     return trt_logger, runtime
 
+def do_inference(context, bindings, inputs, outputs, stream, batch_size=1, explicit_batch=False):
+    [inp.htod(stream) for inp in inputs]
+    context_exec = context.execute_async_v2 if explicit_batch else context.execute_async
+    context_exec(batch_size=batch_size, bindings=bindings, stream_handle=stream.handle)
+    [out.dtoh(stream) for out in outputs]
+    stream.synchronize()
+    return [out.h for out in outputs]
+
+class HostDeviceMem:
+    def __init__(self, host_mem, device_mem):
+        self.h = host_mem
+        self.d = device_mem
+        #self.name
+
+    def __str__(self):   return "Host:\n" + str(self.h) + "\nDevice:\n" + str(self.d)
+    def __repr__(self):  return self.__str__()
+
+    def htod(self, stream):
+        cuda.memcpy_htod_async(self.d, self.h, stream)
+        #stream.synchronize()
+
+    def dtoh(self, stream):
+        cuda.memcpy_dtoh_async(self.h, self.d, stream)
+        #stream.synchronize()
+
+def allocate_buffers(engine, dtypes=None):
+    """
+    Args:
+        engine (trt.ICudaEngine): TensorRT engine
+    Returns:
+        inputs [HostDeviceMem]: engine input memory
+        outputs [HostDeviceMem]: engine output memory
+        bindings [int]: buffer to device bindings
+        stream (cuda.Stream): cuda stream for engine inference synchronization
+    """
+    inputs = []
+    outputs = []
+    bindings = []
+    stream = cuda.Stream()
+    for i, binding in enumerate(engine):
+        bind_name = engine.get_binding_name(i)
+        size = trt.volume(engine.get_binding_shape(binding)) * engine.max_batch_size
+        if dtypes is not None:
+            dtype = dtypes[i]
+        else:
+            dtype = trt.nptype(engine.get_binding_dtype(binding))
+
+        host_mem = cuda.pagelocked_empty(size, dtype)
+        device_mem = cuda.mem_alloc(host_mem.nbytes)
+        bindings.append(int(device_mem))
+
+        mem = HostDeviceMem(host_mem, device_mem)
+        mem.name = bind_name
+
+        if engine.binding_is_input(binding): inputs.append(mem)
+        else: outputs.append(mem)
+
+    return inputs, outputs, bindings, stream
+
+#export
 class BaseEngine:
     """Base engine class
         Creates TRT engine, allocates memory
@@ -141,24 +143,20 @@ class BaseEngine:
         self.context = self.engine.create_execution_context()
         dtypes = self.config.get('dtypes', None)
         self.inputs, self.outputs, self.bindings, self.stream = allocate_buffers(self.engine, dtypes=dtypes)
+        self.output_shapes = [self.engine.get_binding_shape(i) for i in range(self.engine.num_bindings) if not self.engine.binding_is_input(i)]
 
     def sync(self): self.stream.synchronize()
 
     def info(self):
-        print([self.engine.get_binding_name(i) for i in range(self.engine.num_bindings)])
-        print([self.engine.get_binding_shape(i) for i in range(self.engine.num_bindings)])
-        print([self.engine.get_binding_dtype(i) for i in range(self.engine.num_bindings)])
+        for i in range(self.engine.num_bindings):
+            print(self.engine.get_binding_name(i), self.engine.get_binding_shape(i), self.engine.get_binding_dtype(i))
 
     def execute(self, bindings, sync=True):
         self.context.execute_async(bindings=bindings, stream_handle=self.stream.handle)
         if sync: self.sync()
 
     def load_input(self, inp):
-        """
-        inp is 4D tensor or list of 3D tensors
-        """
-        #assert isinstance(inp, list), 'input must be a list'
-
+        #inp is 4D tensor or list of 3D tensors
         for i, inputs in zip(inp, self.inputs):
             np.copyto(inputs.h, i.ravel())
 
@@ -171,7 +169,7 @@ class BaseEngine:
         if sync: self.sync()
 
     def _start(self):
-        self.dtoh(sync=True)
-        self.execute(self.bindings)
         self.htod(sync=True)
-        return [out.h for out in self.outputs]
+        self.execute(self.bindings)
+        self.dtoh(sync=True)
+        return {o.name:o.h.reshape(s) for o, s in zip(self.outputs, self.output_shapes)}
