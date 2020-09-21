@@ -136,6 +136,8 @@ class BaseEngine:
         self.stream = cuda.Stream()
         self.inputs, self.outputs, self.bindings = allocate_buffers(self.engine, dtypes=dtypes)
         self.output_shapes = [self.engine.get_binding_shape(i) for i in range(self.engine.num_bindings) if not self.engine.binding_is_input(i)]
+        self.input_shapes = [self.engine.get_binding_shape(i) for i in range(self.engine.num_bindings) if self.engine.binding_is_input(i)]
+
 
     def sync(self): self.stream.synchronize()
 
@@ -144,7 +146,8 @@ class BaseEngine:
             print(self.engine.get_binding_name(i), self.engine.get_binding_shape(i), self.engine.get_binding_dtype(i))
 
     def execute(self, bindings, sync=True):
-        self.context.execute_async(bindings=bindings, stream_handle=self.stream.handle)
+        #self.context.execute_async(bindings=bindings, stream_handle=self.stream.handle)
+        self.context.execute_async_v2(bindings=bindings, stream_handle=self.stream.handle)
         if sync: self.sync()
 
     def load_input(self, inp):
